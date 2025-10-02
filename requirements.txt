@@ -1,5 +1,4 @@
 streamlit
-gdown
 google-generativeai
 langchain-text-splitters
 PyPDF2
