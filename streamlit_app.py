@@ -3,147 +3,125 @@ import os, glob, gdown
 import google.generativeai as genai
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from PyPDF2 import PdfReader
-import docx
-import openpyxl
+import docx, openpyxl
 from pptx import Presentation
 
-# =============== 1) Cấu hình Gemini API ===============
+# 1) Gemini API
 API_KEY = st.secrets.get("GOOGLE_API_KEY", "")
 if not API_KEY:
-    st.error("Thiếu GOOGLE_API_KEY trong Secrets. Vào App settings → Secrets để thêm API key (AIza...).")
+    st.error("Thiếu GOOGLE_API_KEY trong Secrets (App settings → Secrets).")
     st.stop()
 genai.configure(api_key=API_KEY)
 
-# =============== 2) Hàm đọc file ======================
-def read_pdf(path: str) -> str:
+# 2) Đọc file
+def read_pdf(p):
     try:
-        text = ""
-        reader = PdfReader(path)
-        for p in reader.pages:
-            text += p.extract_text() or ""
+        text=""; r=PdfReader(p)
+        for page in r.pages: text += page.extract_text() or ""
         return text
-    except Exception as e:
-        return f"\n[PDF lỗi {os.path.basename(path)}: {e}]\n"
+    except Exception as e: return f"\n[PDF lỗi {os.path.basename(p)}: {e}]\n"
 
-def read_docx(path: str) -> str:
+def read_docx(p):
     try:
-        d = docx.Document(path)
+        d=docx.Document(p)
         return "\n".join((para.text or "") for para in d.paragraphs)
-    except Exception as e:
-        return f"\n[DOCX lỗi {os.path.basename(path)}: {e}]\n"
+    except Exception as e: return f"\n[DOCX lỗi {os.path.basename(p)}: {e}]\n"
 
-def read_excel(path: str) -> str:
+def read_excel(p):
     try:
-        wb = openpyxl.load_workbook(path, data_only=True)
-        lines = []
+        wb=openpyxl.load_workbook(p, data_only=True); out=[]
         for s in wb.sheetnames:
-            ws = wb[s]
-            for row in ws.iter_rows(values_only=True):
-                cells = [str(c) for c in row if c is not None]
-                if cells:
-                    lines.append(" | ".join(cells))
-        return "\n".join(lines)
-    except Exception as e:
-        return f"\n[XLSX lỗi {os.path.basename(path)}: {e}]\n"
+            for row in wb[s].iter_rows(values_only=True):
+                cells=[str(c) for c in row if c is not None]
+                if cells: out.append(" | ".join(cells))
+        return "\n".join(out)
+    except Exception as e: return f"\n[XLSX lỗi {os.path.basename(p)}: {e}]\n"
 
-def read_pptx(path: str) -> str:
+def read_pptx(p):
     try:
-        prs = Presentation(path)
-        out = []
+        prs=Presentation(p); out=[]
         for slide in prs.slides:
             for sh in slide.shapes:
-                if hasattr(sh, "text"):
-                    out.append(sh.text or "")
+                if hasattr(sh,"text"): out.append(sh.text or "")
         return "\n".join(out)
-    except Exception as e:
-        return f"\n[PPTX lỗi {os.path.basename(path)}: {e}]\n"
+    except Exception as e: return f"\n[PPTX lỗi {os.path.basename(p)}: {e}]\n"
 
-def read_txt(path: str) -> str:
-    try:
-        return open(path, "r", encoding="utf-8", errors="ignore").read()
-    except Exception as e:
-        return f"\n[TXT lỗi {os.path.basename(path)}: {e}]\n"
+def read_txt(p):
+    try: return open(p,"r",encoding="utf-8",errors="ignore").read()
+    except Exception as e: return f"\n[TXT lỗi {os.path.basename(p)}: {e}]\n"
 
-def read_file(path: str) -> str:
-    p = path.lower()
-    if p.endswith(".pdf"):  return read_pdf(path)
-    if p.endswith(".docx"): return read_docx(path)
-    if p.endswith(".xlsx"): return read_excel(path)
-    if p.endswith(".pptx"): return read_pptx(path)
-    if p.endswith(".txt") or p.endswith(".csv"): return read_txt(path)
-    return ""  # bỏ qua định dạng không hỗ trợ
+def read_file(p):
+    pl=p.lower()
+    if pl.endswith(".pdf"): return read_pdf(p)
+    if pl.endswith(".docx"): return read_docx(p)
+    if pl.endswith(".xlsx"): return read_excel(p)
+    if pl.endswith(".pptx"): return read_pptx(p)
+    if pl.endswith(".txt") or pl.endswith(".csv"): return read_txt(p)
+    return ""
 
-# =============== 3) Tải dữ liệu từ Google Drive =======
+# 3) Tải toàn bộ thư mục bằng gdown (có bắt lỗi)
 def load_data_from_gdrive(folder_id: str) -> str:
-    """
-    Cần: thư mục được share 'Anyone with the link - Viewer'
-    (hoặc bạn dùng service account và đã share quyền cho SA đó).
-    """
     os.makedirs("data", exist_ok=True)
-
-    # dọn sạch data cũ để tránh trộn
+    # dọn cũ
     for p in glob.glob("data/*"):
         if os.path.isdir(p):
-            import shutil
-            shutil.rmtree(p, ignore_errors=True)
+            import shutil; shutil.rmtree(p, ignore_errors=True)
         else:
             try: os.remove(p)
             except: pass
 
     try:
-        # Dùng id= thay vì url=
         gdown.download_folder(
             id=folder_id,
             output="data",
             quiet=True,
-            use_cookies=False,  # cần cho streamlit.cloud
+            use_cookies=False,   # cần cho Streamlit Cloud
+            remaining_ok=True    # không fail nếu vài file không tải được
         )
     except Exception as e:
+        st.exception(e)  # hiện full stacktrace để sửa nhanh
         st.error(
-            "Không tải được thư mục từ Google Drive.\n"
-            f"Lỗi: {e}\n\n"
-            "Cách xử lý:\n"
-            "• Kiểm tra đúng Folder ID (chuỗi sau 'folders/').\n"
-            "• Bật 'Anyone with the link → Viewer' cho thư mục cần đọc.\n"
+            "Không tải được thư mục từ Google Drive.\n\n"
+            "Kiểm tra:\n"
+            "• Folder ID đúng chưa (chuỗi sau 'folders/')?\n"
+            "• Thư mục đã mở 'Anyone with the link → Viewer' chưa?\n"
         )
         return ""
 
-    # Đọc tất cả file (kể cả thư mục con)
-    texts = []
-    for path in glob.glob("data/**/*", recursive=True):
-        if os.path.isfile(path):
-            texts.append(read_file(path))
+    texts=[]
+    for p in glob.glob("data/**/*", recursive=True):
+        if os.path.isfile(p):
+            texts.append(read_file(p))
     return "\n".join(texts)
 
-# =============== 4) Chunk dữ liệu ======================
-def chunk_text(text: str, chunk_size=1000, overlap=200):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=overlap)
-    return splitter.split_text(text)
+# 4) Chunk
+def chunk_text(text, chunk_size=1000, overlap=200):
+    return RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size, chunk_overlap=overlap
+    ).split_text(text)
 
-# =============== 5) UI ================================
+# 5) UI
 st.title("📂 AI Assistant phân tích dữ liệu từ Google Drive")
-
 folder_id = st.text_input("Nhập Google Drive Folder ID:", "")
 data = ""
 
 if folder_id.strip():
     with st.spinner("Đang tải và xử lý dữ liệu..."):
         data = load_data_from_gdrive(folder_id.strip())
-    if data:
-        chunks = chunk_text(data)
-        st.success(f"✅ Đã load {len(chunks)} chunks dữ liệu.")
-    else:
+    if not data:
         st.stop()
+    chunks = chunk_text(data)
+    st.success(f"✅ Đã load {len(chunks)} chunks dữ liệu.")
 
 query = st.text_input("Nhập câu hỏi:")
 if query and data:
     try:
         model = genai.GenerativeModel("gemini-1.5-pro")
-        context = data[:20000]  # cắt bớt để an toàn context
-        prompt = f"Dữ liệu:\n{context}\n\nCâu hỏi: {query}\n\nTrả lời ngắn gọn, dựa vào dữ liệu."
+        prompt = f"Dữ liệu:\n{data[:20000]}\n\nCâu hỏi: {query}\n\nTrả lời ngắn gọn, dựa vào dữ liệu."
         with st.spinner("Đang phân tích bằng Gemini..."):
             resp = model.generate_content(prompt)
         st.subheader("🔎 Kết quả AI phân tích")
         st.write(resp.text)
     except Exception as e:
-        st.error(f"Lỗi khi gọi Gemini: {e}")
+        st.exception(e)
+        st.error("Lỗi khi gọi Gemini – kiểm tra lại API key hoặc nội dung câu hỏi.")
