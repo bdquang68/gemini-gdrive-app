@@ -105,18 +105,69 @@ with tab_zip:
                     texts.append(read_file(p))
             data = "\n".join(texts)
         st.success("✅ Đã giải nén & nạp dữ liệu từ .zip.")
+# ---- Làm chữ trong ô nhập đen và đậm hơn ----
+st.markdown("""
+<style>
+/* Ô nhập text */
+.stTextInput input {
+    color: #000000 !important;        /* chữ đen hẳn */
+    font-weight: 700 !important;      /* đậm */
+    font-size: 16px !important;       /* to hơn chút (tùy chỉnh) */
+}
+
+/* Placeholder trong ô nhập */
+.stTextInput input::placeholder {
+    color: #555555 !important;        /* placeholder cũng đậm hơn mặc định */
+    font-weight: 500 !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ========= 5) Hỏi AI =========
 query = st.text_input("Nhập câu hỏi:")
 if query and data:
     try:
-        model = genai.GenerativeModel("gemini-1.5-pro")
-        prompt = f"Dữ liệu:\n{data[:20000]}\n\nCâu hỏi: {query}\n\nTrả lời ngắn gọn, dựa vào dữ liệu."
+        model = genai.GenerativeModel(
+            "gemini-1.5-pro",
+            generation_config={"temperature": 0.3, "max_output_tokens": 1024}
+        )
+
+        # Thu gọn context để tránh 400 "prompt too long"
+        context = data[:20000]
+        prompt = f"Dữ liệu:\n{context}\n\nCâu hỏi: {query}\n\nTrả lời ngắn gọn, dựa vào dữ liệu."
+
         with st.spinner("Đang phân tích bằng Gemini..."):
             resp = model.generate_content(prompt)
-        st.subheader("🔎 Kết quả AI phân tích")
-        st.write(resp.text)
-    except Exception as e:
-        st.exception(e)
-        st.error("Lỗi khi gọi Gemini.")
 
+        # Một số case bị chặn nội dung → resp.text trống
+        answer = getattr(resp, "text", "") or ""
+        if not answer:
+            # Thử đọc candidate/errors để show rõ lý do
+            blocked = []
+            for c in getattr(resp, "candidates", []) or []:
+                safety = getattr(c, "safety_ratings", None) or []
+                if safety:
+                    blocked.extend([f"{r.category}={r.probability}" for r in safety])
+            if blocked:
+                st.error("Nội dung bị chặn bởi bộ lọc an toàn của Gemini:\n" + "\n".join(blocked))
+            else:
+                st.warning("Gemini không trả lời (resp.text rỗng). Thử rút gọn dữ liệu hoặc đổi câu hỏi.")
+        else:
+            st.subheader("🔎 Kết quả AI phân tích")
+            st.write(answer)
+
+    except genai.types.generation_types.BlockedPromptException as e:
+        st.exception(e)
+        st.error("Prompt bị chặn bởi bộ lọc an toàn. Hãy rút gọn hoặc điều chỉnh nội dung.")
+    except genai.types.generation_types.StopCandidateException as e:
+        st.exception(e)
+        st.error("Gemini dừng sinh nội dung sớm. Thử hỏi ngắn hơn.")
+    except Exception as e:
+        # Hiện toàn bộ lỗi để dễ khoanh vùng (HTTP 400/401/403/429/500…)
+        st.exception(e)
+        st.error(
+            "Lỗi khi gọi Gemini. Có thể do:\n"
+            "• GOOGLE_API_KEY sai/hết hạn/quota (401/403/429)\n"
+            "• Prompt quá dài (400) → rút gọn dữ liệu\n"
+            "• Sự cố tạm thời phía server (500)\n"
+        )
